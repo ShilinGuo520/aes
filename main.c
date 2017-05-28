@@ -24,8 +24,25 @@ void sub_bytes(unsigned char *data, int size)
     int i = 0;
     while(i < size) {
         data[i] = s_box[0xf & (data[i] >> 4)][0xf & (data[i])];
+        i++;
     }
 }
+
+unsigned int sub_word(unsigned int data)
+{
+    unsigned int ret = 0;
+    unsigned char c_data[4] = {0};
+    int i;
+    for(i = 0; i < 4; i++) {
+        c_data[i] |= (unsigned char)(0xff & (data >> (i * 8)));
+    }
+    sub_bytes(c_data, 4);
+    ret = c_data[0] | (c_data[1] << 8) | (c_data[2] << 16) | (c_data[3] << 24);
+    printf("sub_word:0x%8x \n\r", ret);
+    
+    return ret;
+}
+
 
 void shift(unsigned char *data, int shift)
 {
@@ -46,6 +63,18 @@ void shift(unsigned char *data, int shift)
     }
 }
 
+unsigned int rot_word(unsigned int data)
+{
+    unsigned char temp;
+    unsigned int ret;
+    temp = (unsigned char)(0xff & (data >> 24));
+    data = data << 8;
+    data |= temp;
+    ret = data;
+    printf("rto_word: ret=0x%8x\n\r", ret);
+    return ret;
+}
+
 void shift_rows(unsigned char *data)
 {
     int i = 0;
@@ -56,9 +85,117 @@ void shift_rows(unsigned char *data)
     }
 }
 
+unsigned char gf_2_8(unsigned char a, unsigned char b)
+{
+    unsigned char p = 0, i = 0, hbs = 0;
+
+    for (i = 0; i < 8; i++) {
+        if (b & 1) {
+            p ^= a;
+        }
+
+        hbs = a & 0x80;
+
+        a <<= 1;
+
+        if (hbs) a ^= 0x1b; // 0000 0001 0001 1011
+        b >>= 1;
+    }
+
+    return p;
+}
 
 
-void shift_tast(void)
+void column(unsigned char *data)
+{
+    unsigned char s0,s1,s2,s3;
+    unsigned char *in_data = data;
+
+    printf("\n\r");
+    printf("0x%2x 0x%2x 0x%2x 0x%2x \n\r", (*in_data), (*(in_data + 4)), (*(in_data + 8)), (*(in_data + 12)));
+    s0 = gf_2_8(2, (*in_data)) ^ gf_2_8(3, (*(in_data + 4))) ^ gf_2_8(1, (*(in_data + 8))) ^ gf_2_8(1, (*(in_data + 12)));
+    s1 = gf_2_8(1, (*in_data)) ^ gf_2_8(2, (*(in_data + 4))) ^ gf_2_8(3, (*(in_data + 8))) ^ gf_2_8(1, (*(in_data + 12)));
+    s2 = gf_2_8(1, (*in_data)) ^ gf_2_8(1, (*(in_data + 4))) ^ gf_2_8(2, (*(in_data + 8))) ^ gf_2_8(3, (*(in_data + 12)));
+    s3 = gf_2_8(3, (*in_data)) ^ gf_2_8(1, (*(in_data + 4))) ^ gf_2_8(1, (*(in_data + 8))) ^ gf_2_8(2, (*(in_data + 12)));
+
+    *in_data = s0;
+    *(in_data + 4) = s1;
+    *(in_data + 8) = s2;
+    *(in_data + 12) = s3;
+
+    printf("0x%2x 0x%2x 0x%2x 0x%2x \n\r", (*in_data), (*(in_data + 4)), (*(in_data + 8)), (*(in_data + 12)));
+}
+
+void mix_columns(unsigned char *data)
+{
+    int i = 0;
+    while(i < 4) {
+        column((data + i));
+        i++;
+    }
+}
+
+
+void key_expansion(unsigned char *key, unsigned int *w, int n)
+{
+    unsigned char rcon[] = {0x00, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36};
+    int i = 0;
+    unsigned int temp;
+    while (i < n) {
+        w[i] = (key[4 * i] << 24) | (key[4 * i + 1] << 16) | (key[4 * i + 2] << 8) | ((key[4 * i + 3]) << 0);
+        i++;
+    }
+
+    i = n;
+    while (i < (11 * n)) {
+        temp = w[i - 1];
+
+        if ((i%4) == 0) {
+            temp = sub_word(rot_word(temp)) ^ (((unsigned int)rcon[i/n]) << 24 );
+        }
+
+        w[i] = w[i - n] ^ temp;
+        i++;
+    }
+}
+
+
+void key_test()
+{
+    unsigned char key[16] = {0x2b, 0x7e, 0x15, 0x16, \
+                             0x28, 0xae, 0xd2, 0xa6, \
+                             0xab, 0xf7, 0x15, 0x88, \
+                             0x09, 0xcf, 0x4f, 0x3c};
+
+    unsigned int ex_key[44] = {0};
+    int i;
+
+    key_expansion(key, ex_key, 4);
+    for (i = 0; i < 44; i = i + 4) {
+        printf("0x%8x 0x%8x 0x%8x 0x%8x \r\n", ex_key[i], ex_key[i + 1], ex_key[i + 2], ex_key[i + 3]);
+    }
+
+}
+
+void mix_test()
+{
+    unsigned char buf[] = {0xc9,0x01,0x02,0x03,0x6e,0x05,0x06,0x07,0x46,0x09,0x10,0x11,0xa6,0x13,0x14,0x15};
+    unsigned char i = 0,j = 0;
+    mix_columns(buf);
+    while(i < 4) {
+        j = 0;
+        printf("\n\r");
+        while(j < 4) {
+            printf("0x%2x ",buf[i*4 + j]);
+            j++;
+        }
+        i++;
+    }
+    printf("\n\r");
+}
+
+
+void shift_test(void)
 {
     unsigned char buf[] = {0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x10,0x11,0x12,0x13,0x14,0x15};
     unsigned char i = 0,j = 0;
@@ -77,7 +214,53 @@ void shift_tast(void)
 
 int main()
 {
-    shift_tast();
+    unsigned char i = 0, j =0;
+    unsigned char input[16] = {0x19, 0xa0, 0x9a, 0xe9, \
+                               0x3d, 0xf4, 0xc6, 0xf8, \
+                               0xe3, 0xe2, 0x8d, 0x48, \
+                               0xbe, 0x2b, 0x2a, 0x08};
+    key_test();
+    return 0;
+    sub_bytes(input, 16);
+    printf("\n\rsub_bytes\n\r");
+    while(i < 4) {
+        j = 0;
+        printf("\n\r");
+        while(j < 4) {
+            printf("0x%2x ",input[i*4 + j]);
+            j++;
+        }
+        i++;
+    }
+
+    shift_rows(input);
+    i = 0;
+    j = 0;
+    printf("\n\rshift_rows\n\r");
+    while(i < 4) {  
+            j = 0;
+            printf("\n\r");
+            while(j < 4) {
+                    printf("0x%2x ",input[i*4 + j]);
+                    j++;
+            }
+            i++;
+    }
+
+    mix_columns(input);
+    i = 0;
+    j = 0;
+    printf("\n\rmix_columns\n\r");
+    while(i < 4) {
+            j = 0;
+            printf("\n\r");
+            while(j < 4) {
+                    printf("0x%2x ",input[i*4 + j]);
+                    j++;
+            }
+            i++;
+    }
+
     return 0;
 }
 
